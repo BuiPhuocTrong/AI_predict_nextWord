@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>Next-word prediction (Kneser–Ney)</title>
+<style>
+body {
+    font-family: Arial, sans-serif;
+    max-width: 700px;
+    margin: auto;
+    padding: 20px;
+}
+h1 { text-align: center; }
+input {
+    width: 100%;
+    padding: 10px;
+    font-size: 16px;
+}
+button {
+    padding: 8px 12px;
+    margin: 5px 5px 0 0;
+    cursor: pointer;
+}
+.prediction button {
+    background: #f1f1f1;
+    border: 1px solid #ccc;
+}
+.box {
+    margin-top: 20px;
+    padding: 10px;
+    border: 1px solid #ddd;
+}
+details { margin-top: 20px; }
+pre { white-space: pre-wrap; }
+</style>
+</head>
+
+<body>
+
+<h1>⌨️ Next-word prediction</h1>
+<p><i>N-gram + Interpolated Kneser–Ney smoothing</i></p>
+
+<input id="sentence" placeholder="Nhập câu..." />
+
+<br><br>
+<button onclick="learn()">📚 Học câu này</button>
+
+<div class="box prediction">
+<h3>🔮 Gợi ý từ tiếp theo</h3>
+<div id="predictions"></div>
+</div>
+
+<details>
+<summary>📊 Mô hình đã học</summary>
+<h4>Vocabulary</h4>
+<pre id="vocabView"></pre>
+
+<h4>N-gram statistics</h4>
+<pre id="statsView"></pre>
+</details>
+
+<script>
+/* ======================
+   1. Tham số
+====================== */
+const MAX_K = 3;
+const DISCOUNT = 0.75;
+
+/* ======================
+   2. Bộ nhớ
+====================== */
+let stats = {};              // { context: { word: count } }
+let vocab = new Set();
+let continuation = {};       // { word: Set(contexts) }
+let totalContinuationContexts = 0;
+
+/* ======================
+   3. Tiền xử lý
+====================== */
+function cleanText(text) {
+    return text.toLowerCase()
+        .replace(/[,.!?;:"'()]/g, "")
+        .split(/\s+/)
+        .filter(w => /^[a-zà-ỹ]+$/.test(w));
+}
+
+/* ======================
+   4. Online learning
+====================== */
+function updateStats(text) {
+    const words = cleanText(text);
+    words.forEach(w => vocab.add(w));
+
+    for (let k = 1; k <= MAX_K; k++) {
+        for (let i = 0; i < words.length - k; i++) {
+            const context = words.slice(i, i + k).join(" ");
+            const nextWord = words[i + k];
+
+            if (!stats[context]) stats[context] = {};
+            stats[context][nextWord] = (stats[context][nextWord] || 0) + 1;
+
+            if (!continuation[nextWord]) continuation[nextWord] = new Set();
+            continuation[nextWord].add(context);
+        }
+    }
+
+    totalContinuationContexts = Object.values(continuation)
+        .reduce((sum, s) => sum + s.size, 0);
+}
+
+/* ======================
+   5. Back-off context
+====================== */
+function backoffContext(tokens) {
+    for (let size = Math.min(MAX_K, tokens.length); size >= 1; size--) {
+        const ctx = tokens.slice(tokens.length - size).join(" ");
+        if (stats[ctx]) return ctx;
+    }
+    return null;
+}
+
+/* ======================
+   6. Kneser–Ney
+====================== */
+function knUnigramProb(word) {
+    if (!continuation[word]) return 0;
+    return continuation[word].size / totalContinuationContexts;
+}
+
+function knProb(contextTokens, word) {
+    if (contextTokens.length === 0) {
+        return knUnigramProb(word);
+    }
+
+    const context = contextTokens.join(" ");
+    const counts = stats[context];
+
+    if (!counts) {
+        return knProb(contextTokens.slice(1), word);
+    }
+
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    const countHW = counts[word] || 0;
+    const uniqueNext = Object.keys(counts).length;
+
+    const lambda = (DISCOUNT * uniqueNext) / total;
+    const higher = Math.max(countHW - DISCOUNT, 0) / total;
+    const lower = knProb(contextTokens.slice(1), word);
+
+    return higher + lambda * lower;
+}
+
+function knProbs(tokens) {
+    let probs = [];
+    vocab.forEach(word => {
+        const p = knProb(tokens, word);
+        if (p > 0) probs.push([word, p]);
+    });
+
+    return probs.sort((a, b) => b[1] - a[1]).slice(0, 5);
+}
+
+/* ======================
+   7. Học
+====================== */
+function learn() {
+    const sentence = document.getElementById("sentence").value;
+    if (!sentence.trim()) return;
+
+    updateStats(sentence);
+    alert("Đã học xong!");
+    renderModel();
+    predict();
+}
+
+/* ======================
+   8. Dự đoán
+====================== */
+function predict() {
+    const sentence = document.getElementById("sentence").value;
+    const tokens = cleanText(sentence);
+    const div = document.getElementById("predictions");
+    div.innerHTML = "";
+
+    if (!tokens.length) return;
+
+    const context = backoffContext(tokens);
+    if (!context) {
+        div.innerHTML = "❌ Chưa có ngữ cảnh trong dữ liệu";
+        return;
+    }
+
+    const preds = knProbs(context.split(" "));
+    preds.forEach(([word, prob]) => {
+        const btn = document.createElement("button");
+        btn.textContent = `${word} — ${(prob * 100).toFixed(2)}%`;
+        btn.onclick = () => {
+            document.getElementById("sentence").value += " " + word;
+            predict();
+        };
+        div.appendChild(btn);
+    });
+}
+
+/* ======================
+   9. Hiển thị model
+====================== */
+function renderModel() {
+    document.getElementById("vocabView").textContent =
+        Array.from(vocab).join(", ");
+
+    document.getElementById("statsView").textContent =
+        JSON.stringify(stats, null, 2);
+}
+
+/* ======================
+   10. Auto predict
+====================== */
+document.getElementById("sentence").addEventListener("input", predict);
+</script>
+
+</body>
+</html>
